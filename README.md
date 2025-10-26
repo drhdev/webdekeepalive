@@ -26,7 +26,7 @@ A Python script for automatic **IMAP Keep-Alive** for WEB.DE Freemail accounts t
 
 ### 1. Clone repository
 ```bash
-git clone https://github.com/username/webdekeepalive.git
+git clone https://github.com/drhdev/webdekeepalive.git
 cd webdekeepalive
 ```
 
@@ -256,7 +256,7 @@ webdekeepalive/
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+GNU PUBLIC LICENSE - see [LICENSE](LICENSE) file for details.
 
 ## Contributing
 
@@ -274,12 +274,3 @@ For problems or questions:
 2. **Check logs** in `logs/webdekeepalive.log`
 3. **Verify WEB.DE settings** (IMAP/SMTP activated?)
 4. **Virtual environment** activated?
-
-## Changelog
-
-### v1.0.0
-- Initial version
-- Per-account configuration
-- Centralized logging
-- Email notifications
-- WEB.DE-optimized
