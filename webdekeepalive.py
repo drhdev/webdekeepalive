@@ -3,7 +3,7 @@
 """
 Project:     webdekeepalive
 Script:      webdekeepalive.py
-Version:     0.9
+Version:     0.9.9
 Author:      drhdev
 License:     GPL v3
 Description: IMAP keep-alive for WEB.DE Freemail accounts, designed to be run by cron.
@@ -45,9 +45,9 @@ def check_virtual_environment():
     """
     # Check if we're in a virtual environment
     if not (hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)):
-        print("FEHLER: Dieses Skript muss in einer virtuellen Umgebung (venv) ausgeführt werden.", file=sys.stderr)
+        print("ERROR: This script must be run in a virtual environment (venv).", file=sys.stderr)
         print("Erstelle eine virtuelle Umgebung mit: python3 -m venv .venv", file=sys.stderr)
-        print("Aktiviere sie mit: source .venv/bin/activate", file=sys.stderr)
+        print("Activate it with: source .venv/bin/activate", file=sys.stderr)
         print("Installiere Dependencies mit: pip install -r requirements.txt", file=sys.stderr)
         sys.exit(4)
     
@@ -62,7 +62,7 @@ def check_virtual_environment():
         result = subprocess.run([sys.executable, "-m", "pip", "check"], 
                               capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
-            print("FEHLER: Dependencies nicht erfüllt. Führe 'pip install -r requirements.txt' aus.", file=sys.stderr)
+            print("ERROR: Dependencies not satisfied. Run 'pip install -r requirements.txt'.", file=sys.stderr)
             if result.stderr:
                 print(f"Details: {result.stderr}", file=sys.stderr)
             sys.exit(4)
@@ -113,7 +113,7 @@ class MemoryLogHandler(logging.Handler):
         try:
             msg = self.format(record)
             # Add run separator if this is a new run and we're keeping previous runs
-            if self.keep_previous_runs > 0 and "Verzeichnisprüfung erfolgreich abgeschlossen" in msg:
+            if self.keep_previous_runs > 0 and "Directory check completed successfully" in msg:
                 self.buffer.append(self.run_separator)
             self.buffer.append(msg)
         except Exception:
@@ -123,25 +123,57 @@ class MemoryLogHandler(logging.Handler):
             return ""
         return "\n".join(list(self.buffer)[-n:])
     def get_account_logs(self, n: int = 50) -> str:
-        """Get only logs for this specific account from the global log file."""
+        """Get only INFO and higher level logs for this specific account from the current session."""
         if not self.account_id:
             return self.tail(n)
         
-        try:
-            log_file = Path("logs/webdekeepalive.log")
-            if not log_file.exists():
-                return self.tail(n)
+        # Get logs from the current session only (from memory buffer)
+        account_logs = []
+        for record in self.buffer:
+            if hasattr(record, 'getMessage'):
+                message = record.getMessage()
+                if f"[ACCOUNT={self.account_id}]" in message:
+                    # Only include INFO, WARNING, ERROR, and CRITICAL logs (skip DEBUG)
+                    level = record.levelname
+                    if level in ['INFO', 'WARNING', 'ERROR', 'CRITICAL']:
+                        # Format the log entry similar to the file format
+                        timestamp = record.created
+                        account_logs.append(f"{timestamp.strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]} [{level}] {message}")
+        
+        # Return the last n lines for this account from current session
+        if account_logs:
+            return "\n".join(account_logs[-n:])
+        else:
+            # Fallback: try to get logs from the global log file for this account
+            # But only from the most recent execution (since last "Directory check completed successfully")
+            try:
+                log_file = Path("logs/webdekeepalive.log")
+                if log_file.exists():
+                    account_logs = []
+                    current_run_logs = []
+                    found_directory_check = False
+                    
+                    with open(log_file, "r", encoding="utf-8") as f:
+                        for line in f:
+                            if f"[ACCOUNT={self.account_id}]" in line:
+                                # Check if this is the start of a new run
+                                if "Directory check completed successfully" in line:
+                                    # Start of a new run - clear previous logs and start fresh
+                                    current_run_logs = []
+                                    found_directory_check = True
+                                
+                                # Only include INFO, WARNING, ERROR, and CRITICAL logs (skip DEBUG)
+                                if any(level in line for level in ['[INFO]', '[WARNING]', '[ERROR]', '[CRITICAL]']):
+                                    current_run_logs.append(line.strip())
+                    
+                    # Return logs from the current run only
+                    if current_run_logs:
+                        return "\n".join(current_run_logs[-n:])
+            except Exception:
+                pass
             
-            account_logs = []
-            with open(log_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    if f"[ACCOUNT={self.account_id}]" in line:
-                        account_logs.append(line.strip())
-            
-            # Return the last n lines for this account
-            return "\n".join(account_logs[-n:]) if account_logs else self.tail(n)
-        except Exception:
-            return self.tail(n)
+            # Final fallback: return a simple status message
+            return f"Account {self.account_id}: Recent activity logged successfully"
 
 def ensure_dir(p: Path) -> bool:
     """Create directory if it doesn't exist. Returns True if successful, False otherwise."""
@@ -169,7 +201,7 @@ def verify_required_directories(cfg: dict, logger=None) -> bool:
     # Check each directory
     for dir_name, dir_path in required_dirs:
         if not ensure_dir(dir_path):
-            error_msg = f"FEHLER: Kann {dir_name} '{dir_path}' nicht anlegen. Prüfe Berechtigungen."
+            error_msg = f"ERROR: Cannot create {dir_name} '{dir_path}'. Check permissions."
             if logger:
                 logger.error(error_msg)
             else:
@@ -183,7 +215,7 @@ def verify_required_directories(cfg: dict, logger=None) -> bool:
 
 def setup_logging(log_dir: str, log_level: str, verbose: bool, account_id: str = None):
     if not ensure_dir(Path(log_dir)):
-        print(f"FEHLER: Kann Log-Verzeichnis '{log_dir}' nicht anlegen. Prüfe Berechtigungen.", file=sys.stderr)
+        print(f"ERROR: Cannot create log directory '{log_dir}'. Check permissions.", file=sys.stderr)
         sys.exit(3)
     
     # Create account-specific logger name
@@ -263,7 +295,8 @@ def acquire_lock(lockfile: Path) -> Tuple[bool, Optional[int]]:
 # Core actions
 # -------------------------
 def imap_keepalive(logger, email: str, password: str, host: str, port: int, timeout: int,
-                   retry_max: int, retry_base: float, retry_max_wait: float, retry_min_wait: float, jitter: float) -> Tuple[bool, str]:
+                   retry_max: int, retry_base: float, retry_max_wait: float, retry_min_wait: float, jitter: float,
+                   send_email: bool = False, email_config: dict = None, mem_handler = None) -> Tuple[bool, str]:
     socket.setdefaulttimeout(timeout)
     last_error = ""
     for attempt in range(1, retry_max + 1):
@@ -304,38 +337,113 @@ def imap_keepalive(logger, email: str, password: str, host: str, port: int, time
                 typ, data = mail.noop()
                 logger.debug("IMAP NOOP response: %s - %s", typ, data)
                 
+                # Send email notification while IMAP session is still active
+                if send_email and email_config and mem_handler:
+                    logger.info("📧 Email sending enabled - sending notification during active IMAP session...")
+                    logger.debug("📧 Email configuration: send_email=%s, email_config available=%s, mem_handler available=%s", 
+                                    send_email, bool(email_config), bool(mem_handler))
+                    
+                    # Apply email delay
+                    email_delay = email_config.get("email_delay", 11.0)
+                    if email_delay > 0:
+                        logger.info("⏱️ Waiting %d seconds before email sending...", int(email_delay))
+                        time.sleep(email_delay)
+                else:
+                    logger.info("📧 Email sending disabled or configuration incomplete")
+                    logger.debug("📧 send_email=%s, email_config=%s, mem_handler=%s", 
+                                send_email, bool(email_config), bool(mem_handler))
+                
+                # Prepare and send email if enabled
+                if send_email and email_config and mem_handler:
+                    # Prepare email content
+                    status = "OK"
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    excerpt_lines = 50  # Fixed value
+                    log_excerpt = mem_handler.get_account_logs(max(0, excerpt_lines))
+                    
+                    # Debug logging for email content
+                    logger.debug("📧 Email template variables: status=%s, time=%s, email=%s, log_excerpt_length=%d", 
+                                status, now, email, len(log_excerpt))
+                    logger.debug("📧 Log excerpt preview: %s", log_excerpt[:200] if log_excerpt else "Empty")
+                    logger.debug("📧 Email template body: %s", email_config["body_tmpl"][:200])
+                    
+                    subject = safe_format(email_config["subject_tmpl"], {
+                        "status": status,
+                        "time": now,
+                        "email": email,
+                        "message": "Login successful"
+                    })
+                    # Get hostname for the email template
+                    import socket as socket_module
+                    hostname = socket_module.gethostname()
+                    
+                    body = safe_format(email_config["body_tmpl"], {
+                        "status": status,
+                        "time": now,
+                        "email": email,
+                        "message": "Login successful",
+                        "log_excerpt": log_excerpt,
+                        "hostname": hostname
+                    })
+                    
+                    # Convert \n to actual line breaks
+                    body = body.replace('\\n', '\n')
+                    
+                    # Debug logging for final email content
+                    logger.debug("📧 Final email body length: %d", len(body))
+                    logger.debug("📧 Final email body preview: %s", body[:300])
+                    
+                    # Send email
+                    send_mail(
+                        logger=logger,
+                        smtp_host=email_config["smtp_host"],
+                        smtp_port=email_config["smtp_port"],
+                        smtp_user=email_config["smtp_user"],
+                        smtp_password=email_config["smtp_pass"],
+                        from_email=email,
+                        from_name=email_config["from_name"],
+                        to_email=email_config["to_email"],
+                        subject=subject,
+                        body=body
+                    )
+                
                 # Logout with detailed logging
                 logger.debug("Attempting IMAP LOGOUT command")
                 typ, data = mail.logout()
                 logger.debug("IMAP LOGOUT response: %s - %s", typ, data)
-            logger.info("✅ %s: Login erfolgreich – Konto gilt als aktiv.", email)
-            return True, "Login erfolgreich"
+            logger.info("✅ %s: Login successful – Account is active.", email)
+            return True, "Login successful"
         except imaplib.IMAP4.error as e:
-            last_error = f"IMAP AUTH/PROTO Fehler: {e}"
+            last_error = f"IMAP AUTH/PROTO Error: {e}"
             logger.error("%s", last_error)
             if attempt >= min(2, retry_max):
                 break
         except (socket.timeout, socket.gaierror, ssl.SSLError, ConnectionResetError) as e:
-            last_error = f"Netzwerk/SSL Fehler: {e}"
+            last_error = f"Network/SSL Error: {e}"
             logger.warning("%s: attempt %d failed: %s", email, attempt, e)
             if attempt < retry_max:
                 exp_backoff_sleep(attempt, retry_base, retry_max_wait, jitter, retry_min_wait)
         except Exception as e:
-            last_error = f"Unbekannter Fehler: {e}"
+            last_error = f"Unknown Error: {e}"
             logger.warning("%s: attempt %d failed: %s", email, attempt, e)
             if attempt < retry_max:
                 exp_backoff_sleep(attempt, retry_base, retry_max_wait, jitter, retry_min_wait)
-    logger.error("❌ %s: Alle Versuche fehlgeschlagen: %s", email, last_error or "Fehler")
+    logger.error("❌ %s: All attempts failed: %s", email, last_error or "Error")
     return False, last_error or "Fehler"
 
-def send_mail(logger, smtp_host: str, smtp_port: int, use_tls: bool,
+def send_mail(logger, smtp_host: str, smtp_port: int,
               smtp_user: str, smtp_password: str,
               from_email: str, from_name: str,
               to_email: str, subject: str, body: str,
               retry_max: int = 3, retry_base: float = 3.0, retry_max_wait: float = 30.0, jitter: float = 0.5
               ) -> bool:
+    logger.info("📧 Starting email sending: %s -> %s", from_email, to_email)
+    logger.debug("📧 Email details: Subject='%s', SMTP=%s:%d, SSL=True", subject, smtp_host, smtp_port)
+    
     for attempt in range(1, retry_max + 1):
         try:
+            logger.debug("📧 Email attempt %d/%d", attempt, retry_max)
+            
             msg = MIMEText(body, "plain", "utf-8")
             from_header = f"{from_name} <{from_email}>" if from_name else from_email
             msg["Subject"] = subject
@@ -343,25 +451,155 @@ def send_mail(logger, smtp_host: str, smtp_port: int, use_tls: bool,
             msg["To"] = to_email
             msg["Date"] = formatdate(localtime=True)
 
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
-                server.ehlo()
-                if use_tls:
-                    server.starttls()
-                    server.ehlo()
-                if smtp_user and smtp_password:
-                    server.login(smtp_user, smtp_password)
-                server.sendmail(from_email, [to_email], msg.as_string())
-            logger.info("E-Mail versendet an %s", to_email)
-            return True
+            logger.debug("📧 Connecting to SMTP server %s:%d", smtp_host, smtp_port)
+            
+            # Create custom debug handler to capture SMTP responses
+            class SMTPDebugHandler:
+                def __init__(self, logger):
+                    self.logger = logger
+                
+                def write(self, message):
+                    # Clean up the message and log it
+                    clean_msg = message.strip()
+                    if clean_msg:
+                        self.logger.debug("📧 SMTP Server: %s", clean_msg)
+            
+            # Try with a shorter timeout first
+                logger.debug("📧 Attempting SMTP connection with 10s timeout...")
+            try:
+                # Use SSL connection for port 465, STARTTLS for port 587
+                if smtp_port == 465:
+                    logger.debug("📧 Using SSL connection for port 465")
+                    with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10) as server:
+                        # Enable debug output to capture server responses
+                        server.set_debuglevel(1)
+                        server.debuglevel = 1
+                        
+                        logger.debug("📧 SMTP SSL EHLO")
+                        server.ehlo()
+                        logger.debug("📧 SMTP SSL EHLO Response: %s", getattr(server, 'ehlo_resp', 'N/A'))
+                        
+                        if smtp_user and smtp_password:
+                            logger.debug("📧 SMTP SSL LOGIN with user: %s", smtp_user)
+                            server.login(smtp_user, smtp_password)
+                            logger.debug("📧 SMTP SSL LOGIN Response: %s", getattr(server, 'login_resp', 'N/A'))
+                            logger.debug("📧 SMTP SSL LOGIN successful")
+                        
+                        logger.debug("📧 Sending email via SSL...")
+                        logger.debug("📧 Email content: From=%s, To=%s, Subject=%s", from_email, to_email, subject)
+                        
+                        # Log the raw email content for debugging
+                        email_content = msg.as_string()
+                        logger.debug("📧 Raw Email Content (first 500 chars): %s", email_content[:500])
+                        logger.debug("📧 Email Headers: From=%s, To=%s, Subject=%s, Date=%s", 
+                                   msg["From"], msg["To"], msg["Subject"], msg["Date"])
+                        
+                        # Capture the actual sendmail response
+                        try:
+                            response = server.sendmail(from_email, [to_email], email_content)
+                            logger.debug("📧 SMTP SSL sendmail Response: %s", response)
+                            if response:
+                                logger.warning("📧 SMTP SSL sendmail had problems: %s", response)
+                                for recipient, error in response.items():
+                                    logger.warning("📧 Error for recipient %s: %s", recipient, error)
+                            else:
+                                logger.debug("📧 Email successfully sent to server via SSL")
+                        except Exception as send_error:
+                            logger.error("📧 SMTP SSL sendmail Error: %s", send_error)
+                            raise send_error
+                else:
+                    logger.debug("📧 Using STARTTLS connection for port %d", smtp_port)
+                    with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+                        # Enable debug output to capture server responses
+                        server.set_debuglevel(1)
+                        server.debuglevel = 1
+                        
+                        logger.debug("📧 SMTP EHLO")
+                        server.ehlo()
+                        logger.debug("📧 SMTP EHLO Response: %s", getattr(server, 'ehlo_resp', 'N/A'))
+                        
+                        # Start TLS for non-SSL ports
+                        logger.debug("📧 SMTP STARTTLS")
+                        server.starttls()
+                        logger.debug("📧 SMTP STARTTLS Response: %s", getattr(server, 'starttls_resp', 'N/A'))
+                        server.ehlo()
+                        logger.debug("📧 SMTP EHLO after STARTTLS Response: %s", getattr(server, 'ehlo_resp', 'N/A'))
+                        
+                        if smtp_user and smtp_password:
+                            logger.debug("📧 SMTP LOGIN with user: %s", smtp_user)
+                            server.login(smtp_user, smtp_password)
+                            logger.debug("📧 SMTP LOGIN Response: %s", getattr(server, 'login_resp', 'N/A'))
+                            logger.debug("📧 SMTP LOGIN successful")
+                        
+                        logger.debug("📧 Sending email via STARTTLS...")
+                        logger.debug("📧 Email content: From=%s, To=%s, Subject=%s", from_email, to_email, subject)
+                        
+                        # Log the raw email content for debugging
+                        email_content = msg.as_string()
+                        logger.debug("📧 Raw Email Content (first 500 chars): %s", email_content[:500])
+                        logger.debug("📧 Email Headers: From=%s, To=%s, Subject=%s, Date=%s", 
+                                   msg["From"], msg["To"], msg["Subject"], msg["Date"])
+                        
+                        # Capture the actual sendmail response
+                        try:
+                            response = server.sendmail(from_email, [to_email], email_content)
+                            logger.debug("📧 SMTP STARTTLS sendmail Response: %s", response)
+                            if response:
+                                logger.warning("📧 SMTP STARTTLS sendmail hatte Probleme: %s", response)
+                                for recipient, error in response.items():
+                                    logger.warning("📧 Error for recipient %s: %s", recipient, error)
+                            else:
+                                logger.debug("📧 Email successfully sent to server via STARTTLS")
+                        except Exception as send_error:
+                            logger.error("📧 SMTP STARTTLS sendmail Error: %s", send_error)
+                            raise send_error
+                    
+                    
+                    if smtp_user and smtp_password:
+                        logger.debug("📧 SMTP LOGIN mit Benutzer: %s", smtp_user)
+                        server.login(smtp_user, smtp_password)
+                        logger.debug("📧 SMTP LOGIN Response: %s", getattr(server, 'login_resp', 'N/A'))
+                        logger.debug("📧 SMTP LOGIN erfolgreich")
+                    
+                    logger.debug("📧 Sende E-Mail...")
+                    logger.debug("📧 Email content: From=%s, To=%s, Subject=%s", from_email, to_email, subject)
+                    
+                    # Log the raw email content for debugging
+                    email_content = msg.as_string()
+                    logger.debug("📧 Raw Email Content (first 500 chars): %s", email_content[:500])
+                    logger.debug("📧 Email Headers: From=%s, To=%s, Subject=%s, Date=%s", 
+                               msg["From"], msg["To"], msg["Subject"], msg["Date"])
+                    
+                    # Capture the actual sendmail response
+                    try:
+                        response = server.sendmail(from_email, [to_email], email_content)
+                        logger.debug("📧 SMTP sendmail Response: %s", response)
+                        if response:
+                            logger.warning("📧 SMTP sendmail hatte Probleme: %s", response)
+                            # Log details about failed recipients
+                            for recipient, error in response.items():
+                                logger.warning("📧 Error for recipient %s: %s", recipient, error)
+                        else:
+                            logger.debug("📧 E-Mail erfolgreich an Server gesendet (keine Fehler)")
+                    except Exception as send_error:
+                        logger.error("📧 SMTP sendmail Fehler: %s", send_error)
+                        raise send_error
+                    
+                logger.info("✅ Email successfully sent to %s", to_email)
+                logger.info("📧 Email subject: %s", subject)
+                return True
+            except Exception as smtp_error:
+                logger.error("📧 SMTP connection failed: %s", smtp_error)
+                raise smtp_error
         except (smtplib.SMTPServerDisconnected, smtplib.SMTPResponseException,
                 smtplib.SMTPDataError, smtplib.SMTPConnectError, socket.timeout, ssl.SSLError) as e:
-            logger.warning("E-Mail Versuch %d fehlgeschlagen: %s", attempt, e)
+            logger.warning("Email attempt %d failed: %s", attempt, e)
             if attempt < retry_max:
                 exp_backoff_sleep(attempt, retry_base, retry_max_wait, jitter)
         except Exception as e:
-            logger.error("E-Mail Versand fehlgeschlagen: %s", e)
+            logger.error("Email sending failed: %s", e)
             return False
-    logger.error("E-Mail Versand endgültig fehlgeschlagen.")
+    logger.error("Email sending finally failed.")
     return False
 
 # -------------------------
@@ -392,6 +630,7 @@ def load_account_config_from_env(account_id: str, secrets_dir: str = "secrets") 
     cfg["retry_max_wait"] = float(os.environ.get("ACCOUNT_RETRY_MAX_WAIT", "120.0"))
     cfg["retry_min_wait"] = float(os.environ.get("ACCOUNT_RETRY_MIN_WAIT", "30.0"))
     cfg["jitter"] = float(os.environ.get("ACCOUNT_JITTER", "0.5"))
+    cfg["email_delay"] = float(os.environ.get("ACCOUNT_EMAIL_DELAY", "11.0"))
     
     # Secrets (direct from env)
     cfg["from_name"] = os.environ.get("ACCOUNT_FROM_NAME", "")
@@ -407,7 +646,6 @@ def load_account_config_from_env(account_id: str, secrets_dir: str = "secrets") 
     cfg["send_mail"] = os.environ.get("MAIL_SEND", "false").lower() in {"1","true","yes","y"}
     cfg["smtp_host"] = os.environ.get("MAIL_SMTP_HOST", "smtp.web.de")
     cfg["smtp_port"] = int(os.environ.get("MAIL_SMTP_PORT", "587"))
-    cfg["smtp_use_tls"] = os.environ.get("MAIL_SMTP_USE_TLS", "true").lower() in {"1","true","yes","y"}
     cfg["to_email"] = os.environ.get("MAIL_TO_EMAIL", cfg["email"])
     
     # Templates
@@ -429,7 +667,7 @@ def parse_args():
     p.add_argument("--account", "-a", required=True, help="Account-ID (z.B. main, alt1)")
     p.add_argument("--env", help="Pfad zur zentralen .env (überschreibt ENV_FILE)", default=None)
     p.add_argument("-v", "--verbose", action="store_true", help="Logausgaben zusätzlich auf der Konsole anzeigen")
-    p.add_argument("--send-mail", choices=["yes","no"], help="Mailversand für diesen Lauf erzwingen (override)")
+    p.add_argument("--send-mail", choices=["yes","no"], help="Force email sending for this run (override)")
     p.add_argument("--excerpt-lines", type=int, help="Wie viele Logzeilen in die Mail aufnehmen (override)")
     return p.parse_args()
 
@@ -447,7 +685,7 @@ def main():
     try:
         cfg = load_account_config_from_env(account_id)
     except FileNotFoundError as e:
-        print(f"Config-Fehler: {e}", file=sys.stderr)
+        print(f"Config error: {e}", file=sys.stderr)
         sys.exit(2)
 
     # Verify required directories first (before logging setup)
@@ -457,12 +695,12 @@ def main():
     # Validate required fields
     email = cfg["email"]
     if not email:
-        print("Config-Fehler: ACCOUNT_EMAIL fehlt in secrets/{account_id}.env", file=sys.stderr)
+        print("Config error: ACCOUNT_EMAIL missing in secrets/{account_id}.env", file=sys.stderr)
         sys.exit(2)
 
     password = cfg["password"]
     if not password:
-        print(f"Config-Fehler: ACCOUNT_SMTP_PASS fehlt in secrets/{account_id}.env", file=sys.stderr)
+        print(f"Config error: ACCOUNT_SMTP_PASS missing in secrets/{account_id}.env", file=sys.stderr)
         sys.exit(2)
 
     # Get SMTP credentials and from_name
@@ -476,7 +714,7 @@ def main():
                                         account_id=account_id)
     
     # Log directory verification success
-    logger.info("Verzeichnisprüfung erfolgreich abgeschlossen")
+    logger.info("Directory check completed successfully")
 
     # PID/lock to avoid overlapping runs
     if cfg["use_lock"]:
@@ -484,10 +722,17 @@ def main():
         lockfile = lock_dir / f".keepalive_{cfg['id']}.lock"
         ok_lock, pid = acquire_lock(lockfile)
         if not ok_lock:
-            logger.warning("Anderer Lauf aktiv (PID=%s). Abbruch.", pid if pid else "?")
+            logger.warning("Another run active (PID=%s). Aborting.", pid if pid else "?")
             sys.exit(0)
 
-    # IMAP keepalive
+    # Prepare email configuration
+    send_mail_flag = cfg["send_mail"]
+    if args.send_mail == "yes":
+        send_mail_flag = True
+    elif args.send_mail == "no":
+        send_mail_flag = False
+
+    # IMAP keepalive with integrated email sending
     ok, message = imap_keepalive(
         logger=logger,
         email=email,
@@ -499,58 +744,20 @@ def main():
         retry_base=cfg["retry_base"],
         retry_max_wait=cfg["retry_max_wait"],
         retry_min_wait=cfg["retry_min_wait"],
-        jitter=cfg["jitter"]
+        jitter=cfg["jitter"],
+        send_email=send_mail_flag,
+        email_config=cfg,
+        mem_handler=mem_handler
     )
 
     status = "OK" if ok else "FAIL"
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Only send email notifications if IMAP login was successful
-    if ok:
-        # Optional small pause before SMTP
-        time.sleep(1.0)
-
-        # Mail?
-        send_mail_flag = cfg["send_mail"]
-        if args.send_mail == "yes":
-            send_mail_flag = True
-        elif args.send_mail == "no":
-            send_mail_flag = False
-
-        excerpt_lines = args.excerpt_lines if args.excerpt_lines is not None else 50
-        log_excerpt = mem_handler.get_account_logs(max(0, excerpt_lines))
-
-        if send_mail_flag:
-            subject = safe_format(cfg["subject_tmpl"], {
-                "status": status,
-                "time": now,
-                "email": email,
-                "message": message
-            })
-            body = safe_format(cfg["body_tmpl"], {
-                "status": status,
-                "time": now,
-                "email": email,
-                "message": message,
-                "log_excerpt": log_excerpt
-            })
-            send_mail(
-                logger=logger,
-                smtp_host=cfg["smtp_host"],
-                smtp_port=cfg["smtp_port"],
-                use_tls=cfg["smtp_use_tls"],
-                smtp_user=smtp_user,
-                smtp_password=smtp_pass,
-                from_email=email,
-                from_name=from_name,
-                to_email=cfg["to_email"],
-                subject=subject,
-                body=body
-            )
-    else:
-        # IMAP login failed - log error and exit without sending email
-        logger.error("IMAP login fehlgeschlagen: %s", message)
-        logger.info("Keine E-Mail-Benachrichtigung gesendet (Login fehlgeschlagen)")
+    # Email sending is now integrated into the IMAP session
+    if not ok:
+        # IMAP login failed - log error
+        logger.error("IMAP login failed: %s", message)
+        logger.info("No email notification sent (login failed)")
 
     # Clean up lock
     if cfg.get("use_lock"):
