@@ -1,0 +1,3 @@
+# webdekeepalive — requirements
+# This project uses only Python standard library (no external deps).
+# You can leave this file empty or keep it for future extensions.
