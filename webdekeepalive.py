@@ -212,8 +212,10 @@ def setup_logging(log_dir: str, log_level: str, verbose: bool, account_id: str =
 
     return logger, mem_handler
 
-def exp_backoff_sleep(attempt: int, base: float, max_wait: float, jitter: float):
+def exp_backoff_sleep(attempt: int, base: float, max_wait: float, jitter: float, min_wait: float = 30.0):
     wait = min(base * (2 ** (attempt - 1)), max_wait) + random.random() * max(0.0, jitter)
+    # Add minimum delay to avoid rate limiting (especially for WEB.DE)
+    wait = max(wait, min_wait)  # Minimum delay between attempts
     time.sleep(wait)
 
 def safe_format(template: str, vars: Dict[str, Any]) -> str:
@@ -261,19 +263,51 @@ def acquire_lock(lockfile: Path) -> Tuple[bool, Optional[int]]:
 # Core actions
 # -------------------------
 def imap_keepalive(logger, email: str, password: str, host: str, port: int, timeout: int,
-                   retry_max: int, retry_base: float, retry_max_wait: float, jitter: float) -> Tuple[bool, str]:
+                   retry_max: int, retry_base: float, retry_max_wait: float, retry_min_wait: float, jitter: float) -> Tuple[bool, str]:
     socket.setdefaulttimeout(timeout)
     last_error = ""
     for attempt in range(1, retry_max + 1):
         try:
             logger.info("IMAP login attempt %d/%d for %s (%s:%d)", attempt, retry_max, email, host, port)
             with imaplib.IMAP4_SSL(host, port) as mail:
-                mail.login(email, password)  # imaplib.IMAP4.error on auth issues
-                typ, _ = mail.select("INBOX")
+                # Log initial server greeting
+                logger.debug("Connected to IMAP server %s:%d", host, port)
+                logger.debug("Server greeting: %s", mail.welcome.decode('utf-8', errors='ignore').strip() if hasattr(mail, 'welcome') else "No greeting captured")
+                # Log server capabilities (already exchanged during connection)
+                logger.debug("Server capabilities: %s", mail.capabilities if hasattr(mail, 'capabilities') else "Not available")
+                
+                # Login attempt with detailed logging
+                logger.debug("Attempting IMAP LOGIN command for %s", email)
+                try:
+                    mail.login(email, password)  # imaplib.IMAP4.error on auth issues
+                except imaplib.IMAP4.error as login_error:
+                    # Capture detailed server response for login failure
+                    logger.error("IMAP LOGIN failed with server response: %s", str(login_error))
+                    # Try to get more details from the connection
+                    try:
+                        logger.debug("Checking server capabilities after failed login")
+                        mail.sock.send(b'CAPABILITY\r\n')
+                        response = mail.sock.recv(4096)
+                        logger.debug("Server response after failed login: %s", response.decode('utf-8', errors='ignore').strip())
+                    except Exception as e:
+                        logger.debug("Could not get server response after failed login: %s", e)
+                    raise login_error
+                # Select INBOX with detailed logging
+                logger.debug("Attempting IMAP SELECT INBOX command")
+                typ, data = mail.select("INBOX")
+                logger.debug("IMAP SELECT INBOX response: %s - %s", typ, data)
                 if typ != "OK":
                     raise RuntimeError(f"IMAP SELECT INBOX returned {typ}")
-                mail.noop()
-                mail.logout()
+                
+                # NOOP command with detailed logging
+                logger.debug("Attempting IMAP NOOP command")
+                typ, data = mail.noop()
+                logger.debug("IMAP NOOP response: %s - %s", typ, data)
+                
+                # Logout with detailed logging
+                logger.debug("Attempting IMAP LOGOUT command")
+                typ, data = mail.logout()
+                logger.debug("IMAP LOGOUT response: %s - %s", typ, data)
             logger.info("✅ %s: Login erfolgreich – Konto gilt als aktiv.", email)
             return True, "Login erfolgreich"
         except imaplib.IMAP4.error as e:
@@ -285,12 +319,12 @@ def imap_keepalive(logger, email: str, password: str, host: str, port: int, time
             last_error = f"Netzwerk/SSL Fehler: {e}"
             logger.warning("%s: attempt %d failed: %s", email, attempt, e)
             if attempt < retry_max:
-                exp_backoff_sleep(attempt, retry_base, retry_max_wait, jitter)
+                exp_backoff_sleep(attempt, retry_base, retry_max_wait, jitter, retry_min_wait)
         except Exception as e:
             last_error = f"Unbekannter Fehler: {e}"
             logger.warning("%s: attempt %d failed: %s", email, attempt, e)
             if attempt < retry_max:
-                exp_backoff_sleep(attempt, retry_base, retry_max_wait, jitter)
+                exp_backoff_sleep(attempt, retry_base, retry_max_wait, jitter, retry_min_wait)
     logger.error("❌ %s: Alle Versuche fehlgeschlagen: %s", email, last_error or "Fehler")
     return False, last_error or "Fehler"
 
@@ -356,6 +390,7 @@ def load_account_config_from_env(account_id: str, secrets_dir: str = "secrets") 
     cfg["retry_max"] = int(os.environ.get("ACCOUNT_RETRY_MAX", "5"))
     cfg["retry_base"] = float(os.environ.get("ACCOUNT_RETRY_BASE", "5.0"))
     cfg["retry_max_wait"] = float(os.environ.get("ACCOUNT_RETRY_MAX_WAIT", "120.0"))
+    cfg["retry_min_wait"] = float(os.environ.get("ACCOUNT_RETRY_MIN_WAIT", "30.0"))
     cfg["jitter"] = float(os.environ.get("ACCOUNT_JITTER", "0.5"))
     
     # Secrets (direct from env)
@@ -463,6 +498,7 @@ def main():
         retry_max=cfg["retry_max"],
         retry_base=cfg["retry_base"],
         retry_max_wait=cfg["retry_max_wait"],
+        retry_min_wait=cfg["retry_min_wait"],
         jitter=cfg["jitter"]
     )
 
