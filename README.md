@@ -32,8 +32,8 @@ cd webdekeepalive
 
 ### 2. Create virtual environment (recommended)
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -141,28 +141,28 @@ LOCK_DIR=logs
 crontab -e
 
 # user1: Every Saturday at 17:31
-31 17 * * 6 /path/to/webdekeepalive/.venv/bin/python /path/to/webdekeepalive/webdekeepalive.py --account user1 >> /path/to/webdekeepalive/cron_user1.out 2>&1
+31 17 * * 6 cd /path/to/webdekeepalive && /path/to/webdekeepalive/venv/bin/python /path/to/webdekeepalive/webdekeepalive.py --account user1 >> /path/to/webdekeepalive/cron_user1.out 2>&1
 
 # user2: Every Saturday at 18:44
-44 18 * * 6 /path/to/webdekeepalive/.venv/bin/python /path/to/webdekeepalive/webdekeepalive.py --account user2 >> /path/to/webdekeepalive/cron_user2.out 2>&1
+44 18 * * 6 cd /path/to/webdekeepalive && /path/to/webdekeepalive/venv/bin/python /path/to/webdekeepalive/webdekeepalive.py --account user2 >> /path/to/webdekeepalive/cron_user2.out 2>&1
 ```
 
 ### Example: Monthly execution
 ```bash
 # user1: 1st of every month at 10:00
-0 10 1 * * /path/to/webdekeepalive/.venv/bin/python /path/to/webdekeepalive/webdekeepalive.py --account user1 >> /path/to/webdekeepalive/cron_user1.out 2>&1
+0 10 1 * * cd /path/to/webdekeepalive && /path/to/webdekeepalive/venv/bin/python /path/to/webdekeepalive/webdekeepalive.py --account user1 >> /path/to/webdekeepalive/cron_user1.out 2>&1
 
 # user2: 15th of every month at 14:30
-30 14 15 * * /path/to/webdekeepalive/.venv/bin/python /path/to/webdekeepalive/webdekeepalive.py --account user2 >> /path/to/webdekeepalive/cron_user2.out 2>&1
+30 14 15 * * cd /path/to/webdekeepalive && /path/to/webdekeepalive/venv/bin/python /path/to/webdekeepalive/webdekeepalive.py --account user2 >> /path/to/webdekeepalive/cron_user2.out 2>&1
 ```
 
 ### Example: Daily execution
 ```bash
 # user1: Daily at 08:00
-0 8 * * * /path/to/webdekeepalive/.venv/bin/python /path/to/webdekeepalive/webdekeepalive.py --account user1 >> /path/to/webdekeepalive/cron_user1.out 2>&1
+0 8 * * * cd /path/to/webdekeepalive && /path/to/webdekeepalive/venv/bin/python /path/to/webdekeepalive/webdekeepalive.py --account user1 >> /path/to/webdekeepalive/cron_user1.out 2>&1
 
 # user2: Daily at 20:00
-0 20 * * * /path/to/webdekeepalive/.venv/bin/python /path/to/webdekeepalive/webdekeepalive.py --account user2 >> /path/to/webdekeepalive/cron_user2.out 2>&1
+0 20 * * * cd /path/to/webdekeepalive && /path/to/webdekeepalive/venv/bin/python /path/to/webdekeepalive/webdekeepalive.py --account user2 >> /path/to/webdekeepalive/cron_user2.out 2>&1
 ```
 
 ## Testing
@@ -170,7 +170,7 @@ crontab -e
 ### Manual test
 ```bash
 # Activate virtual environment
-source .venv/bin/activate
+source venv/bin/activate
 
 # Test with verbose output
 python3 webdekeepalive.py --account user1 -v
