@@ -128,7 +128,7 @@ REDACTOR = SecretRedactor()
 DEFAULT_SETTINGS = {
     "DIRECTORIES": {"accounts_dir": "secrets", "logs_dir": "logs"},
     "FILES": {"log_file": "webdekeepalive.log", "lock_file": "webdekeepalive.lock"},
-    "TIMING": {"delay_between_accounts": "10"},
+    "TIMING": {"delay_between_accounts": "10", "lock_wait": "900"},
     "IMAP": {"timeout": "30", "attempts": "4", "base_delay": "30", "max_delay": "300"},
     "SMTP": {"timeout": "30", "attempts": "2", "base_delay": "30", "max_delay": "300"},
     "LOGGING": {"file_enabled": "true", "level": "INFO", "max_bytes": "1048576", "backup_count": "2"},
@@ -161,6 +161,8 @@ class Settings:
     log_file: str = os.path.join(PROJECT_DIR, "logs", "webdekeepalive.log")
     lock_file: str = os.path.join(PROJECT_DIR, "logs", "webdekeepalive.lock")
     delay_between_accounts: float = 10
+    # Seconds to wait for a run of another account to finish before giving up
+    lock_wait: float = 900
     imap_timeout: float = 30
     imap_retry: RetryPolicy = RetryPolicy()
     smtp_timeout: float = 30
@@ -231,6 +233,7 @@ def load_settings(path: str = CONFIG_FILE) -> Settings:
             log_file=os.path.join(logs_dir, parser.get("FILES", "log_file")),
             lock_file=os.path.join(logs_dir, parser.get("FILES", "lock_file")),
             delay_between_accounts=parser.getfloat("TIMING", "delay_between_accounts"),
+            lock_wait=parser.getfloat("TIMING", "lock_wait"),
             imap_timeout=parser.getfloat("IMAP", "timeout"),
             imap_retry=_retry_policy(parser["IMAP"]),
             smtp_timeout=parser.getfloat("SMTP", "timeout"),
@@ -267,6 +270,8 @@ ACCOUNT_KEYS = {
     "ACCOUNT_IMAP_TIMEOUT", "ACCOUNT_FROM_NAME", "ACCOUNT_SMTP_USER", "ACCOUNT_SMTP_PASS",
     "MAIL_SEND", "MAIL_SMTP_HOST", "MAIL_SMTP_PORT", "MAIL_TO_EMAIL",
     "TEMPLATE_SUBJECT", "TEMPLATE_BODY", "HEARTBEAT_URL",
+    # Read by deploy/install-systemd.sh for the account's timer, not by this script
+    "SCHEDULE",
 }
 # Keys of version 0.9.x that are now global settings in webdekeepalive.config (or no longer needed)
 OBSOLETE_KEYS = {
@@ -785,15 +790,24 @@ def setup_logging(settings: Settings, verbose: bool = False):
     logger.addHandler(console)
 
 
-def acquire_lock(path: str) -> Optional[int]:
-    """Returns the lock file descriptor, or None if another instance holds the lock."""
+def acquire_lock(path: str, wait: float = 0, poll_interval: float = 5) -> Optional[int]:
+    """
+    Returns the lock file descriptor, or None if another instance still holds the lock after
+    `wait` seconds. Waiting serialises the per-account timers when they start at the same time,
+    e.g. when both catch up on a missed run after a reboot.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(fd)
-        return None
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                return None
+            time.sleep(poll_interval)
     os.ftruncate(fd, 0)
     os.write(fd, str(os.getpid()).encode())
     return fd
@@ -834,9 +848,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     for warning in settings.warnings:
         logger.warning(warning)
 
-    lock_fd = acquire_lock(settings.lock_file)
+    lock_fd = acquire_lock(settings.lock_file, wait=settings.lock_wait)
     if lock_fd is None:
-        logger.error("Another instance is already running, exiting")
+        logger.error(f"Another instance is still running after waiting {settings.lock_wait:.0f}s, exiting")
         return 3
 
     notifier = Notifier(settings)

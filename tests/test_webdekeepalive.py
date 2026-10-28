@@ -424,7 +424,7 @@ def project(tmp_path, monkeypatch):
     write_env(tmp_path / "secrets", "user1", VALID_ENV)
     config = tmp_path / "webdekeepalive.config"
     config.write_text(f"[LOGGING]\nfile_enabled = true\n[HEARTBEAT]\nenabled = true\nurl = {PUSH_URL}\n"
-                      "[TIMING]\ndelay_between_accounts = 0\n[IMAP]\nbase_delay = 0\n")
+                      "[TIMING]\ndelay_between_accounts = 0\nlock_wait = 0\n[IMAP]\nbase_delay = 0\n")
     config.chmod(0o600)
     monkeypatch.setattr(webdekeepalive, "PROJECT_DIR", str(tmp_path))
     monkeypatch.setattr(webdekeepalive, "CONFIG_FILE", str(config))
@@ -489,6 +489,29 @@ def test_main_lock_held(project):
     finally:
         webdekeepalive.release_lock(fd)
     assert session.urls == []
+
+
+def test_lock_waits_for_other_run(tmp_path, monkeypatch):
+    path = str(tmp_path / "x.lock")
+    holder = webdekeepalive.acquire_lock(path)
+    released = []
+
+    def sleep(seconds):
+        # The other run finishes while we wait
+        if not released:
+            webdekeepalive.release_lock(holder)
+            released.append(True)
+
+    monkeypatch.setattr(webdekeepalive.time, "sleep", sleep)
+    fd = webdekeepalive.acquire_lock(path, wait=60)
+    assert fd is not None and released
+    webdekeepalive.release_lock(fd)
+
+
+def test_schedule_key_is_known(tmp_path):
+    account = webdekeepalive.parse_account(write_env(tmp_path, "a", VALID_ENV + "SCHEDULE=Sun 10:00\n"),
+                                           make_settings())
+    assert account.notes == []
 
 
 def test_main_dry_run_sends_nothing(project):

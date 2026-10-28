@@ -4,7 +4,8 @@ Keeps **WEB.DE Freemail accounts** active. WEB.DE deactivates free accounts that
 logged in to for a longer period (several months). `webdekeepalive.py` logs in to every configured
 account via IMAP on a schedule, so the addresses are not lost.
 
-Built to run unattended on a Raspberry Pi with a systemd timer.
+Built to run unattended on a Raspberry Pi: one weekly systemd timer per account, each on Sunday at
+its own time with a new random delay every week, so the logins do not look like a bot.
 
 ## Features
 
@@ -18,7 +19,8 @@ Built to run unattended on a Raspberry Pi with a systemd timer.
 - **No secrets in logs**: passwords and heartbeat URLs are masked in log lines, tracebacks and mails
 - **SD-card friendly logging**: `INFO` by default, rotating file of 1 MB x 2, or journald only
 - **Lock file** against overlapping runs, `--dry-run` to check the configuration
-- systemd service and timer with hardening, plus an install script
+- systemd service and timer templates with hardening, plus an install script that sets up one
+  timer per account from its `SCHEDULE` line
 
 ## Quick start
 
@@ -29,10 +31,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp webdekeepalive.config.sample webdekeepalive.config
 cp secrets/user1.env.example secrets/user1.env        # one file per account
 chmod 600 webdekeepalive.config secrets/*.env
-nano secrets/user1.env                                 # ACCOUNT_EMAIL, ACCOUNT_PASSWORD
+nano secrets/user1.env                                 # ACCOUNT_EMAIL, ACCOUNT_PASSWORD, SCHEDULE
 .venv/bin/python webdekeepalive.py --dry-run -v
 .venv/bin/python webdekeepalive.py user1 -v
-./deploy/install-systemd.sh                            # daily systemd timer
+./deploy/install-systemd.sh                            # weekly timer per account
 ```
 
 **The complete step-by-step guide** (WEB.DE settings, all configuration options, Uptime Kuma
@@ -59,7 +61,7 @@ accounts failed, `3` another instance is running.
 webdekeepalive.py                 the script
 webdekeepalive.config.sample      global settings (copy to webdekeepalive.config)
 secrets/user1.env.example         account template (copy to secrets/<name>.env)
-deploy/systemd/                   service and timer templates
+deploy/systemd/                   service and timer templates (one instance per account)
 deploy/install-systemd.sh         installs the units
 docs/deploy_git.md                deployment guide
 tests/                            tests, no network access

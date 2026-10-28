@@ -21,8 +21,12 @@ lock_file = webdekeepalive.lock
 # Timing
 # ============================================================================
 [TIMING]
-# Pause in seconds between two accounts
+# Pause in seconds between two accounts when one run handles several accounts
+# (the systemd timers run every account on its own, see SCHEDULE in the account files)
 delay_between_accounts = 10
+# When another run holds the lock (e.g. two account timers catching up after a reboot),
+# wait up to this many seconds for it to finish instead of skipping the run
+lock_wait = 900
 
 # ============================================================================
 # IMAP login (the actual keep-alive)

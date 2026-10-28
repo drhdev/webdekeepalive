@@ -1,0 +1,17 @@
+# One instance per account: webdekeepalive@<name>.timer. install-systemd.sh replaces the
+# default OnCalendar below with SCHEDULE from secrets/<name>.env (drop-in file
+# /etc/systemd/system/webdekeepalive@<name>.timer.d/schedule.conf).
+[Unit]
+Description=Weekly IMAP keep-alive for WEB.DE account %I
+
+[Timer]
+# Default: Sundays at 11:00 local time (see 'man systemd.time')
+OnCalendar=Sun *-*-* 11:00:00
+# A new random delay of up to 90 minutes on every run, so the login time changes from
+# week to week instead of happening at the same minute like a bot
+RandomizedDelaySec=90min
+# Catch up on a run missed while the Pi was switched off
+Persistent=true
+
+[Install]
+WantedBy=timers.target

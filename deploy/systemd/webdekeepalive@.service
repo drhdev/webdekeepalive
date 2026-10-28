@@ -1,6 +1,7 @@
 # Template, installed by deploy/install-systemd.sh which replaces __USER__ and __DIR__.
+# One instance per account: webdekeepalive@<name>.service runs secrets/<name>.env only.
 [Unit]
-Description=IMAP keep-alive for WEB.DE accounts
+Description=IMAP keep-alive for WEB.DE account %I
 Documentation=https://github.com/drhdev/webdekeepalive
 # Wait for network and a synchronised clock (the Raspberry Pi has no hardware clock,
 # and TLS certificate checks fail with a wrong date)
@@ -11,11 +12,12 @@ After=network-online.target time-sync.target
 Type=oneshot
 User=__USER__
 WorkingDirectory=__DIR__
-ExecStart=__DIR__/.venv/bin/python __DIR__/webdekeepalive.py
+ExecStart=__DIR__/.venv/bin/python __DIR__/webdekeepalive.py %I
 # Stop a hanging run; webdekeepalive.py then reports "down" to the heartbeat monitor.
-# With the default retry settings one account needs at most about 7 minutes
-# (4 IMAP attempts with 30s timeout and 30/60/120s pauses, plus the report mail).
-# Raise this value when you have more than 3 accounts.
+# One account needs at most about 7 minutes with the default retry settings (4 IMAP
+# attempts with 30s timeout and 30/60/120s pauses, plus the report mail). If another
+# account is running at the same moment (e.g. both timers catch up after a reboot),
+# the run first waits up to [TIMING] lock_wait = 15 minutes.
 TimeoutStartSec=30min
 # Stay out of the way of other services on the Pi
 Nice=10

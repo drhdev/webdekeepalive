@@ -2,8 +2,8 @@
 
 This guide installs `webdekeepalive.py` on a Raspberry Pi (tested setup: Raspberry Pi 3, Raspberry
 Pi OS Lite, Bookworm or newer) in the home directory of the user that runs it, sets up the
-configuration, a daily systemd timer and an Uptime Kuma heartbeat, and shows how to update it with
-`git pull`.
+configuration, a weekly systemd timer per account (Sundays, every account at its own time) and an
+Uptime Kuma heartbeat, and shows how to update it with `git pull`.
 
 The examples use the user `pi` and the directory `~/python/webdekeepalive`, i.e.
 `/home/pi/python/webdekeepalive`. Use your own user name; the commands below take it from `$USER`
@@ -39,7 +39,7 @@ sudo apt install -y git python3 python3-venv
 python3 --version   # must be 3.9 or newer
 ```
 
-Set the time zone, it decides when the daily run starts:
+Set the time zone, it decides when the weekly runs start:
 
 ```bash
 sudo timedatectl set-timezone Europe/Berlin
@@ -105,6 +105,7 @@ The minimum is:
 ACCOUNT_ID=user1
 ACCOUNT_EMAIL=your.name@web.de
 ACCOUNT_PASSWORD=PASTE_PASSWORD_HERE
+SCHEDULE=Sun 10:00
 ```
 
 | Key | What to enter |
@@ -113,6 +114,7 @@ ACCOUNT_PASSWORD=PASTE_PASSWORD_HERE
 | `ACCOUNT_EMAIL` | The WEB.DE address, also the IMAP user name |
 | `ACCOUNT_PASSWORD` | WEB.DE or app-specific password from step 4. Files from version 0.9 with `ACCOUNT_SMTP_PASS` keep working. |
 | `ACCOUNT_IMAP_HOST`, `ACCOUNT_IMAP_PORT` | Only change them for other providers |
+| `SCHEDULE` | When the weekly login runs, e.g. `Sun 10:00`; every run starts at a new random time up to 90 minutes later. Give each account its own time, see below. Read by the install script (step 9), default `Sun 11:00`. |
 | `HEARTBEAT_URL` | Optional own Uptime Kuma monitor for this account, see step 7 |
 | `MAIL_SEND` | `true` sends a short report mail after every run (also when the login failed for network reasons). With Uptime Kuma you usually do not need it. |
 | `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT`, `MAIL_TO_EMAIL`, `ACCOUNT_FROM_NAME` | Report mail settings, defaults: `smtp.web.de`, `465`, the account address, no name |
@@ -122,7 +124,21 @@ Rules for the file: one `KEY=value` per line, no spaces needed around `=`, comme
 own line. Everything after `=` belongs to the value, so a password may contain `#`, `=` or spaces.
 
 In nano: save with `Ctrl+O`, `Enter`, quit with `Ctrl+X`. Repeat for every account
-(`secrets/user2.env`, ...), then protect the files:
+(`secrets/user2.env`, ...).
+
+**Different times per account**: all accounts log in on Sunday, but each at its own time, so
+WEB.DE does not see logins of several accounts from the same IP within seconds. Recommended for two
+accounts:
+
+| Account | `SCHEDULE` | Actual login |
+|---|---|---|
+| `user1` | `Sun 10:00` | between 10:00 and 11:30, different every week |
+| `user2` | `Sun 17:30` | between 17:30 and 19:00, different every week |
+
+Check a value with `systemd-analyze calendar "Sun 17:30"` (it shows the next date). A weekly login is
+plenty to keep the accounts active.
+
+Then protect the files:
 
 ```bash
 chmod 700 secrets
@@ -138,7 +154,7 @@ chmod 600 webdekeepalive.config
 nano webdekeepalive.config
 ```
 
-Every option is explained in the file, the defaults fit a daily run. Usually you only change:
+Every option is explained in the file, the defaults fit the weekly runs. Usually you only change:
 
 ```ini
 [LOGGING]
@@ -157,9 +173,13 @@ failed logins can get the account blocked.
 
 The heartbeat reports a failed login **and** a run that did not happen at all (Pi switched off, SD
 card broken, timer disabled). After each run the script calls the push URL with `status=up` and a
-message like `OK: 2/2 accounts logged in in 4s`, or with `status=down` and the reason, e.g.
-`FAILED 1/2 in 215s: user2`. If no push arrives within the heartbeat interval, Uptime Kuma marks the
+message like `OK: 1/1 accounts logged in in 4s`, or with `status=down` and the reason, e.g.
+`FAILED 1/1 in 215s: user2`. If no push arrives within the heartbeat interval, Uptime Kuma marks the
 monitor as down by itself.
+
+Every account runs on its own (step 9), so **one monitor per account** is the clearest setup: each
+monitor then shows exactly one account. The global URL in `webdekeepalive.config` gets a push from
+every account run; it is useful as a single "keep-alive is running at all" monitor.
 
 ### Create the monitor
 
@@ -169,21 +189,22 @@ monitor as down by itself.
 4. **Push URL**: Uptime Kuma shows a URL like
    `https://uptime.example.com/api/push/AbCdEf1234?status=up&msg=OK&ping=`.
    Click **Copy**. Keep this URL private, anyone who has it can report to the monitor.
-5. **Heartbeat Interval**: `90000` seconds (25 hours) for the daily run.
-   If your Uptime Kuma version does not accept values above `86400`, enter `86400`.
+5. **Heartbeat Interval**: `648000` seconds (7.5 days) for the weekly run.
+   Older Uptime Kuma versions limit the interval; if the value is refused, update Uptime Kuma.
 6. **Retries**: `1`
-7. **Heartbeat Retry Interval**: `7200` seconds (2 hours)
+7. **Heartbeat Retry Interval**: `21600` seconds (6 hours)
 8. **Notifications**: enable the channels that should alert you (e.g. Telegram, e-mail).
    If none exist yet, create one under **Settings → Notifications** first.
 9. Click **Save**
 
 The monitor shows *Pending* until the first push arrives.
 
-Why these values: the timer starts at 07:15 plus a random delay of up to 30 minutes, and a run takes
-seconds (or a few minutes with network retries). So two pushes are between about 23.5 and 24.5
-hours apart. Interval plus retry interval (here 27 hours) is clearly longer, so you get no false
-alarms, but a missing run is reported on the same day. With **Retries** `1`, Uptime Kuma first
-switches to *Pending* and only alerts after the retry interval.
+Why these values: each account runs once a week with a random delay of up to 90 minutes, and a run
+takes seconds (or a few minutes with network retries). So two pushes of the same account are 7 days
+plus or minus 1.5 hours apart. Interval plus retry interval (here 7.75 days) is clearly longer, so you
+get no false alarms, but a missing run is reported on Monday. With **Retries** `1`, Uptime Kuma
+first switches to *Pending* and only alerts after the retry interval. For the global monitor (pushes
+from all accounts) the same values work.
 
 ### Enter the URL
 
@@ -197,9 +218,9 @@ url = https://uptime.example.com/api/push/AbCdEf1234?status=up&msg=OK&ping=
 
 The script replaces `status`, `msg` and `ping` on every call and masks the URL in the log.
 
-### Optional: one monitor per account
+### Recommended: one monitor per account
 
-To see every account separately, create one more push monitor per account with the same settings and
+Create one push monitor per account with the same settings (e.g. `WEB.DE user1`, `WEB.DE user2`) and
 enter its URL in the account file:
 
 ```bash
@@ -207,7 +228,8 @@ HEARTBEAT_URL=https://uptime.example.com/api/push/User1Token
 ```
 
 It reports `OK: login successful, 123 message(s) in INBOX` or `FAILED: <reason>` for this account.
-The global monitor keeps reporting the run as a whole.
+If you use only per-account monitors, set `enabled = false` in `[HEARTBEAT]` of
+`webdekeepalive.config`.
 
 ## 8. Test by hand
 
@@ -243,9 +265,12 @@ line and exit code `0`. The heartbeat (and the report mail, if enabled) arrives.
 
 ## 9. Install the systemd timer
 
-The repository contains a service and a timer in `deploy/systemd/`. The install script fills in
-your user name and directory, copies both to `/etc/systemd/system/`, sets `chmod 600` on all
-configuration files, makes `time-sync.target` wait for a synchronised clock and enables the timer:
+The repository contains a service and a timer template in `deploy/systemd/`
+(`webdekeepalive@.service`, `webdekeepalive@.timer`). Every account gets its own instance, e.g.
+`webdekeepalive@user1.timer`, which runs only `secrets/user1.env`. The install script fills in your
+user name and directory, copies the templates to `/etc/systemd/system/`, writes the `SCHEDULE` of
+every account file into its timer, sets `chmod 600` on all configuration files, makes
+`time-sync.target` wait for a synchronised clock and enables one timer per account:
 
 ```bash
 cd ~/python/webdekeepalive
@@ -253,34 +278,39 @@ cd ~/python/webdekeepalive
 ```
 
 Run it as your normal user (not with `sudo`), it asks for the sudo password itself. At the end it
-shows the next start time:
+shows the schedule and the next start time of every account:
 
 ```
-NEXT                        LEFT      LAST PASSED UNIT                   ACTIVATES
-Thu 2025-01-02 07:31:09 CET 10h left  -    -      webdekeepalive.timer   webdekeepalive.service
+  user1: Sun 10:00 (plus up to 90 minutes random delay)
+  user2: Sun 17:30 (plus up to 90 minutes random delay)
+
+NEXT                        LEFT        LAST PASSED UNIT                        ACTIVATES
+Sun 2025-01-05 10:41:17 CET 2 days left -    -      webdekeepalive@user1.timer  webdekeepalive@user1.service
+Sun 2025-01-05 18:12:55 CET 2 days left -    -      webdekeepalive@user2.timer  webdekeepalive@user2.service
 ```
 
-What the service does (see `deploy/systemd/webdekeepalive.service`):
+What the service does (see `deploy/systemd/webdekeepalive@.service`):
 
-- runs `.venv/bin/python webdekeepalive.py` (all accounts) as your user in `~/python/webdekeepalive`
+- runs `.venv/bin/python webdekeepalive.py <name>` as your user in `~/python/webdekeepalive`
 - starts only after the network is up and the clock is synchronised
+- if another account is running at that moment (both timers catching up after a reboot), waits for
+  it (up to `lock_wait`, 15 minutes) instead of logging in at the same time
 - stops a run that hangs for more than 30 minutes (`TimeoutStartSec`); the script then reports
-  `down` to the heartbeat. With more than 3 accounts raise the value in the service file.
+  `down` to the heartbeat
 - runs with low CPU and disk priority and may only write to `logs/`
 
-The timer starts the service daily at 07:15 (plus up to 30 minutes) and catches up on a missed run
-after the Pi was switched off. To change the time, edit `OnCalendar` in
-`deploy/systemd/webdekeepalive.timer` and run the install script again. A weekly run
-(`OnCalendar=Sat 07:15`) is enough to keep the accounts alive; then set the Uptime Kuma interval to
-`691200` seconds (8 days).
+Each timer starts its account weekly at its `SCHEDULE` plus a new random delay of up to 90 minutes
+(`RandomizedDelaySec`), and catches up on a missed run after the Pi was switched off. To change a
+time, edit `SCHEDULE` in the account file and run `./deploy/install-systemd.sh` again. Run it again
+as well after adding an account file.
 
 ## 10. Test the systemd service
 
-Start a run now and follow it:
+Start a run for one account now and follow it:
 
 ```bash
-sudo systemctl start --no-block webdekeepalive.service
-journalctl -u webdekeepalive.service -f
+sudo systemctl start --no-block webdekeepalive@user1.service
+journalctl -u 'webdekeepalive@*' -f
 ```
 
 `Ctrl+C` ends the `journalctl` view, not the run. Without `--verbose` the journal only shows warnings
@@ -293,31 +323,33 @@ tail -f ~/python/webdekeepalive/logs/webdekeepalive.log
 After the run:
 
 ```bash
-systemctl status webdekeepalive.service      # "Deactivated successfully" / status=0/SUCCESS
-systemctl list-timers webdekeepalive.timer   # LAST shows the run, NEXT the next one
+systemctl status webdekeepalive@user1.service    # "Deactivated successfully" / status=0/SUCCESS
+systemctl list-timers 'webdekeepalive@*'         # LAST shows the run, NEXT the next one
 grep FINAL_STATUS ~/python/webdekeepalive/logs/webdekeepalive.log | tail
 ```
 
-In Uptime Kuma the monitor shows the message `OK: ... accounts logged in in ...`.
+In Uptime Kuma the monitor shows the message `OK: ...`. Repeat for the other accounts.
 
 ## 11. Daily operation
 
 | Task | Command |
 |---|---|
-| When is the next run? | `systemctl list-timers webdekeepalive.timer` |
-| Result of the last run | `systemctl status webdekeepalive.service` |
+| When are the next runs? | `systemctl list-timers 'webdekeepalive@*'` |
+| Result of the last run | `systemctl status 'webdekeepalive@*.service'` |
 | Results per account | `grep FINAL_STATUS ~/python/webdekeepalive/logs/webdekeepalive.log \| tail -20` |
 | Full log | `less ~/python/webdekeepalive/logs/webdekeepalive.log` |
-| Run now | `sudo systemctl start --no-block webdekeepalive.service` |
-| Stop a running run | `sudo systemctl stop webdekeepalive.service` (reports `down` to the heartbeat) |
-| Pause the daily runs | `sudo systemctl disable --now webdekeepalive.timer` |
-| Resume | `sudo systemctl enable --now webdekeepalive.timer` |
-| Add an account | create `secrets/<name>.env`, `chmod 600` it, `.venv/bin/python webdekeepalive.py --dry-run -v` |
+| Run one account now | `sudo systemctl start --no-block webdekeepalive@user1.service` |
+| Stop a running run | `sudo systemctl stop webdekeepalive@user1.service` (reports `down` to the heartbeat) |
+| Pause one account | `sudo systemctl disable --now webdekeepalive@user1.timer` |
+| Resume | `sudo systemctl enable --now webdekeepalive@user1.timer` |
+| Change a time | edit `SCHEDULE` in `secrets/<name>.env`, run `./deploy/install-systemd.sh` |
+| Add an account | create `secrets/<name>.env` with its own `SCHEDULE`, `.venv/bin/python webdekeepalive.py --dry-run -v`, run `./deploy/install-systemd.sh` |
+| Remove an account | `sudo systemctl disable --now webdekeepalive@<name>.timer`, then delete `secrets/<name>.env` |
 
 With level `INFO` a run writes about 5 lines per account. The log file is rotated at 1 MB and keeps
 2 old files, so it never uses more than 3 MB. To write nothing at all to the SD card, set
 `file_enabled = false` in `[LOGGING]`; the full log then goes to the journal
-(`journalctl -u webdekeepalive.service`). Passwords and heartbeat URLs are masked in the log.
+(`journalctl -u 'webdekeepalive@*'`). Passwords and heartbeat URLs are masked in the log.
 
 ## 12. Updates with git pull
 
@@ -351,11 +383,12 @@ To go back to the previous version: `git checkout ORIG_HEAD` right after the pul
 
 ## 13. Upgrading from version 0.9 (cron)
 
-Version 1.0 runs all accounts in one run from a systemd timer instead of one cron line per account.
+Version 1.0 runs every account from its own weekly systemd timer instead of a cron line.
 
 1. Remove the old cron lines: `crontab -e`, delete the `webdekeepalive.py` lines, save
 2. Update the code (step 12) and install the new dependencies (step 3)
-3. Your `secrets/*.env` files keep working. The keys `ACCOUNT_RETRY_*`, `ACCOUNT_JITTER`,
+3. Your `secrets/*.env` files keep working; add a `SCHEDULE` line with a different time per account
+   (step 5). The keys `ACCOUNT_RETRY_*`, `ACCOUNT_JITTER`,
    `ACCOUNT_EMAIL_DELAY`, `LOG_DIR`, `LOG_LEVEL`, `LOCK_USE` and `LOCK_DIR` are no longer used (the
    log says so once per run); delete them or move the values to `webdekeepalive.config`.
    Remove inline comments after values (`KEY=value  # comment`), they would become part of the value.
@@ -369,6 +402,7 @@ accounts failed, `3` already running. The report mail is sent after the IMAP log
 
 | Symptom | Cause and fix |
 |---|---|
+| `Invalid SCHEDULE` from the install script | Check the value with `systemd-analyze calendar "Sun 10:00"` |
 | `status=203/EXEC` in `systemctl status` | `.venv` missing or moved: repeat step 3, then `./deploy/install-systemd.sh` |
 | `Read-only file system` in the journal | `logs_dir` in `webdekeepalive.config` points outside `logs/`. The service may only write to `logs/`; keep the default. |
 | `Invalid account file 'x.env': ...` | The reason is in the message; fix the file and run `--dry-run -v` |
@@ -377,12 +411,12 @@ accounts failed, `3` already running. The report mail is sent after the IMAP log
 | `gaierror` / `Network is unreachable` until the end | No network or DNS on the Pi: `ping -c3 imap.web.de` |
 | `CERTIFICATE_VERIFY_FAILED` | Wrong clock: `timedatectl` (step 1) |
 | `Report mail ... failed` | SMTP not enabled or wrong `MAIL_SMTP_PORT`; the keep-alive itself still counts as OK |
-| `Another instance is already running` | A run is still active: `systemctl status webdekeepalive.service` |
+| `Another instance is still running after waiting 900s` | Another account's run hangs: `systemctl status 'webdekeepalive@*.service'` |
 | `Files with credentials are readable by other users` | `chmod 600 webdekeepalive.config secrets/*.env` |
 | Uptime Kuma stays *Pending* | No push yet. Test with `curl` (step 8a) and check `[HEARTBEAT] enabled = true`. |
 | Uptime Kuma shows *Down* with a message | The message says which account failed; details in `logs/webdekeepalive.log` |
 | Uptime Kuma shows *Down* without a message | No push within the interval: Pi off, timer disabled (`systemctl list-timers`) or no network |
-| Run starts long after 07:15 after a reboot | Expected: `Persistent=true` catches up, and the service waits for the clock to be synchronised |
+| Run starts at an unexpected time after a reboot | Expected: `Persistent=true` catches up on a missed Sunday, and the service waits for the clock to be synchronised |
 
 Exit codes: `0` all accounts logged in, `1` all failed / configuration error / stopped, `2` some
 accounts failed, `3` another instance is running. `systemctl status` shows any code other than `0`
@@ -391,8 +425,9 @@ as failed.
 ## 15. Uninstall
 
 ```bash
-sudo systemctl disable --now webdekeepalive.timer
-sudo rm /etc/systemd/system/webdekeepalive.service /etc/systemd/system/webdekeepalive.timer
+sudo systemctl disable --now 'webdekeepalive@*.timer'
+sudo rm -r /etc/systemd/system/webdekeepalive@.service /etc/systemd/system/webdekeepalive@.timer \
+  /etc/systemd/system/webdekeepalive@*.timer.d
 sudo systemctl daemon-reload
 rm -rf ~/python/webdekeepalive
 ```
