@@ -1,0 +1,80 @@
+# webdekeepalive.py configuration (global settings for all accounts)
+# Copy to 'webdekeepalive.config' and adjust. Keep the file private: chmod 600 webdekeepalive.config
+# The file is optional, without it the defaults shown here apply.
+# All paths are relative to the project directory.
+
+# ============================================================================
+# Directories and files
+# ============================================================================
+[DIRECTORIES]
+# Directory with the account files (<name>.env)
+accounts_dir = secrets
+# Directory for the log file and the lock file
+logs_dir = logs
+
+[FILES]
+log_file = webdekeepalive.log
+# Prevents two runs at the same time
+lock_file = webdekeepalive.lock
+
+# ============================================================================
+# Timing
+# ============================================================================
+[TIMING]
+# Pause in seconds between two accounts
+delay_between_accounts = 10
+
+# ============================================================================
+# IMAP login (the actual keep-alive)
+# ============================================================================
+[IMAP]
+# Timeout in seconds for connecting and for each IMAP command.
+# Can be overridden per account with ACCOUNT_IMAP_TIMEOUT.
+timeout = 30
+# Attempts for network problems (WLAN/DNS hiccups, timeouts, dropped connections) with
+# exponential backoff: base_delay, 2x, 4x, ... capped at max_delay (30s, 60s, 120s).
+# A rejected password is never retried, so the account is not locked.
+attempts = 4
+base_delay = 30
+max_delay = 300
+
+# ============================================================================
+# SMTP (optional report mail, see MAIL_SEND in the account files)
+# ============================================================================
+[SMTP]
+timeout = 30
+# Only connecting and login are retried, so a report mail is never sent twice
+attempts = 2
+base_delay = 30
+max_delay = 300
+
+# ============================================================================
+# Logging
+# ============================================================================
+[LOGGING]
+# Write a log file. Set to false to log to stderr only (journald when run by the
+# systemd timer), which avoids writes to the SD card completely.
+file_enabled = true
+# DEBUG, INFO, WARNING, ERROR. INFO writes about 5 lines per account and run.
+level = INFO
+# Rotation: max size per file in bytes and number of old files kept.
+# 1 MB with 2 backups = at most 3 MB on disk.
+max_bytes = 1048576
+backup_count = 2
+
+# ============================================================================
+# Heartbeat (e.g. Uptime Kuma push monitor)
+# ============================================================================
+# After every run the script calls this URL with status=up (all accounts logged in)
+# or status=down (at least one failed, configuration error, crash or SIGTERM) and a
+# short message. If the Pi or the script stops running, the push is missing and the
+# monitor goes down on its own. A heartbeat per account is possible with HEARTBEAT_URL
+# in the account file. See docs/deploy_git.md, section "Uptime Kuma".
+[HEARTBEAT]
+enabled = false
+# Push URL from Uptime Kuma. Parameters copied along (?status=up&msg=OK&ping=) are
+# replaced by the script, so the URL can be pasted as shown in Uptime Kuma.
+url = https://uptime.example.com/api/push/your_push_token
+# Request timeout in seconds and retries for connection errors, 429 and 5xx
+timeout = 10
+retries = 3

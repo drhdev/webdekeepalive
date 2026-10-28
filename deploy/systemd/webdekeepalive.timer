@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily IMAP keep-alive for WEB.DE accounts
+
+[Timer]
+# Daily at 07:15 local time, change as needed (see 'man systemd.time').
+# One login per day keeps the accounts active and reveals a changed or blocked
+# password within a day.
+OnCalendar=*-*-* 07:15:00
+# Start at a slightly different time every day instead of exactly on the minute
+RandomizedDelaySec=30min
+# Catch up on a run missed while the Pi was switched off
+Persistent=true
+
+[Install]
+WantedBy=timers.target

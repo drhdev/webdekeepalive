@@ -1,0 +1,28 @@
+# Template, installed by deploy/install-systemd.sh which replaces __USER__ and __DIR__.
+[Unit]
+Description=IMAP keep-alive for WEB.DE accounts
+Documentation=https://github.com/drhdev/webdekeepalive
+# Wait for network and a synchronised clock (the Raspberry Pi has no hardware clock,
+# and TLS certificate checks fail with a wrong date)
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=__DIR__/.venv/bin/python __DIR__/webdekeepalive.py
+# Stop a hanging run; webdekeepalive.py then reports "down" to the heartbeat monitor.
+# With the default retry settings one account needs at most about 7 minutes
+# (4 IMAP attempts with 30s timeout and 30/60/120s pauses, plus the report mail).
+# Raise this value when you have more than 3 accounts.
+TimeoutStartSec=30min
+# Stay out of the way of other services on the Pi
+Nice=10
+IOSchedulingClass=idle
+# Hardening: read-only system, writable logs directory only
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__DIR__/logs
